@@ -1,0 +1,17 @@
+# Binary
+encore
+/cmd/encore/encore
+/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Config (may contain API keys)
+config.json

@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9090
+  },
+
+  "log": {
+    "consoleLevel": "info",
+    "fileLevel": "debug"
+  },
+
+  "retry": {
+    "maxRetries": 5,
+    "retryInterval": 3000
+  },
+
+  "activeProviders": {
+    "openai": "nvidia-nim",
+    "anthropic": ""
+  },
+
+  "providers": {
+    "nvidia-nim": {
+      "name": "NVIDIA NIM",
+      "protocol": "openai",
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "apiKey": "nvapi-xxxxxxxxxxxx"
+    }
+  }
+}
