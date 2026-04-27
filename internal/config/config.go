@@ -17,10 +17,12 @@ type Config struct {
 	Providers       map[string]ProviderConfig `json:"providers"`
 }
 
-// ServerConfig defines the local proxy server listen address.
+// ServerConfig defines the local proxy server listen addresses.
+// openaiPort is required; anthropicPort is optional (0 = disabled).
 type ServerConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host          string `json:"host"`
+	OpenaiPort    int    `json:"openaiPort"`
+	AnthropicPort int    `json:"anthropicPort"`
 }
 
 // LogConfig controls log levels for console and file output.
@@ -36,7 +38,7 @@ type RetryConfig struct {
 }
 
 // ActiveProvidersConfig maps each protocol to its active provider key.
-// An empty string means the protocol is not enabled.
+// An empty string means that protocol is not enabled.
 type ActiveProvidersConfig struct {
 	OpenAI    string `json:"openai"`
 	Anthropic string `json:"anthropic"`
@@ -44,16 +46,36 @@ type ActiveProvidersConfig struct {
 
 // ProviderConfig describes an upstream AI API provider.
 type ProviderConfig struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"` // "openai" | "anthropic"
-	BaseURL  string `json:"baseUrl"`
-	APIKey   string `json:"apiKey"`
+	Name       string `json:"name"`
+	Protocol   string `json:"protocol"`   // "openai" | "anthropic"
+	BaseURL    string `json:"baseUrl"`
+	APIKey     string `json:"apiKey"`
+	ModelsFile string `json:"models"`     // optional: custom model list JSON filename
 }
 
 // ConfigDir returns the path to the Encore config directory.
 func ConfigDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "encore")
+}
+
+// ActiveProvider returns the provider config for the given protocol
+// based on activeProviders mapping. Returns false if not configured.
+func (c *Config) ActiveProvider(protocol string) (ProviderConfig, bool) {
+	var key string
+	switch protocol {
+	case "openai":
+		key = c.ActiveProviders.OpenAI
+	case "anthropic":
+		key = c.ActiveProviders.Anthropic
+	default:
+		return ProviderConfig{}, false
+	}
+	if key == "" {
+		return ProviderConfig{}, false
+	}
+	p, ok := c.Providers[key]
+	return p, ok
 }
 
 // Load reads and validates the config from ~/.config/encore/config.json.
@@ -104,7 +126,7 @@ func validateRawJSON(data []byte) []string {
 
 	// server.*
 	if serverRaw, ok := raw["server"]; ok {
-		errors = append(errors, checkObjectKeys(serverRaw, "server", []string{"host", "port"})...)
+		errors = append(errors, checkObjectKeys(serverRaw, "server", []string{"host", "openaiPort"})...)
 	}
 
 	// log.*
@@ -161,8 +183,14 @@ func validateConfig(cfg *Config) []string {
 	if cfg.Server.Host == "" {
 		errors = append(errors, "server.host cannot be empty")
 	}
-	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
-		errors = append(errors, "server.port must be between 1 and 65535")
+	if cfg.Server.OpenaiPort <= 0 || cfg.Server.OpenaiPort > 65535 {
+		errors = append(errors, "server.openaiPort must be between 1 and 65535")
+	}
+	if cfg.Server.AnthropicPort < 0 || cfg.Server.AnthropicPort > 65535 {
+		errors = append(errors, "server.anthropicPort must be between 0 and 65535 (0 = disabled)")
+	}
+	if cfg.Server.OpenaiPort == cfg.Server.AnthropicPort && cfg.Server.AnthropicPort != 0 {
+		errors = append(errors, "server.openaiPort and server.anthropicPort must be different")
 	}
 
 	// log
@@ -188,11 +216,6 @@ func validateConfig(cfg *Config) []string {
 		errors = append(errors, "activeProviders must have at least one non-empty provider (openai or anthropic)")
 	}
 
-	// providers
-	if len(cfg.Providers) == 0 {
-		errors = append(errors, "providers must contain at least one provider")
-	}
-
 	// activeProviders references must exist and match protocol
 	if ap.OpenAI != "" {
 		if p, ok := cfg.Providers[ap.OpenAI]; !ok {
@@ -207,6 +230,11 @@ func validateConfig(cfg *Config) []string {
 		} else if p.Protocol != "anthropic" {
 			errors = append(errors, fmt.Sprintf("activeProviders.anthropic %q points to a provider with protocol %q, expected \"anthropic\"", ap.Anthropic, p.Protocol))
 		}
+	}
+
+	// providers
+	if len(cfg.Providers) == 0 {
+		errors = append(errors, "providers must contain at least one provider")
 	}
 
 	// each provider

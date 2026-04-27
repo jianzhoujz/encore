@@ -9,22 +9,24 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jianzhoujz/encore/internal/config"
 	"github.com/jianzhoujz/encore/internal/logger"
 )
 
-// Server is the local reverse-proxy that forwards requests to the current
+// Server is the local reverse-proxy that forwards requests to a single
 // upstream provider and retries automatically on rate-limit or transient errors.
 type Server struct {
-	config *config.Config
-	logger *logger.Logger
-	client *http.Client
+	provider config.ProviderConfig
+	config   *config.Config
+	logger   *logger.Logger
+	client   *http.Client
 }
 
-// NewServer creates a proxy Server with sensible transport defaults.
-func NewServer(cfg *config.Config, log *logger.Logger) *Server {
+// NewServer creates a proxy Server bound to a specific upstream provider.
+func NewServer(cfg *config.Config, provider config.ProviderConfig, log *logger.Logger) *Server {
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -36,37 +38,21 @@ func NewServer(cfg *config.Config, log *logger.Logger) *Server {
 	}
 
 	return &Server{
-		config: cfg,
-		logger: log,
+		provider: provider,
+		config:   cfg,
+		logger:   log,
 		client: &http.Client{
-			// No overall timeout — streaming responses may take arbitrarily long.
 			Transport: transport,
 		},
 	}
 }
 
-// Start begins listening and serving on the configured address.
-func (s *Server) Start() error {
-	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
-	ap := s.config.ActiveProviders
-
-	s.logger.Info("Starting Encore proxy server on %s", addr)
+// Start begins listening and serving on the given address.
+func (s *Server) Start(addr string) error {
+	s.logger.Info("Starting Encore proxy server on %s (%s -> %s)",
+		addr, s.provider.Name, s.provider.BaseURL)
 	s.logger.Info("Retry policy: max %d retries, %dms interval",
 		s.config.Retry.MaxRetries, s.config.Retry.RetryInterval)
-
-	if ap.OpenAI != "" {
-		p := s.config.Providers[ap.OpenAI]
-		s.logger.Info("OpenAI provider: %s (%s) -> %s", p.Name, ap.OpenAI, p.BaseURL)
-	} else {
-		s.logger.Info("OpenAI provider: (disabled)")
-	}
-
-	if ap.Anthropic != "" {
-		p := s.config.Providers[ap.Anthropic]
-		s.logger.Info("Anthropic provider: %s (%s) -> %s", p.Name, ap.Anthropic, p.BaseURL)
-	} else {
-		s.logger.Info("Anthropic provider: (disabled)")
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
@@ -74,33 +60,7 @@ func (s *Server) Start() error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// Anthropic API paths.
-var anthropicPaths = map[string]bool{
-	"/v1/messages": true,
-}
-
-// resolveProvider determines which provider should handle the request based on
-// the URL path. Returns the provider config and true, or an empty config and
-// false if no matching provider is active.
-func (s *Server) resolveProvider(path string) (config.ProviderConfig, bool) {
-	cleanPath := strings.TrimSuffix(path, "/")
-	ap := s.config.ActiveProviders
-
-	if anthropicPaths[cleanPath] {
-		if ap.Anthropic != "" {
-			return s.config.Providers[ap.Anthropic], true
-		}
-		return config.ProviderConfig{}, false
-	}
-
-	// Everything else is treated as OpenAI.
-	if ap.OpenAI != "" {
-		return s.config.Providers[ap.OpenAI], true
-	}
-	return config.ProviderConfig{}, false
-}
-
-// handleRequest dispatches incoming requests to the appropriate handler.
+// handleRequest dispatches incoming requests to the configured provider.
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Health-check probe (e.g. Claude Code sends HEAD / before connecting).
 	if r.URL.Path == "/" {
@@ -109,19 +69,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, ok := s.resolveProvider(r.URL.Path)
-	if !ok {
-		s.logger.Error("No active provider for path: %s", r.URL.Path)
-		http.Error(w, "no active provider for this protocol", http.StatusBadGateway)
+	// Custom model list override — if the configured provider has a models file,
+	// serve it directly instead of proxying upstream.
+	if s.handleModels(w, r) {
 		return
 	}
 
-	s.proxyWithRetry(w, r, provider)
+	s.proxyWithRetry(w, r)
 }
 
 // proxyWithRetry forwards a request to the upstream provider, automatically
 // retrying on 429 / 502 / 503 / 504 or network errors.
-func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request, provider config.ProviderConfig) {
+func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request) {
 	// Buffer the body so we can replay it on retries.
 	var bodyBytes []byte
 	if r.Body != nil {
@@ -137,13 +96,13 @@ func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request, provider
 
 	s.logger.Info("-> %s %s", r.Method, r.URL.Path)
 
-	upstreamURL := buildUpstreamURL(provider, r.URL.Path, r.URL.RawQuery)
+	upstreamURL := buildUpstreamURL(s.provider, r.URL.Path, r.URL.RawQuery)
 	s.logger.Info("   Upstream: %s", upstreamURL)
 	if len(bodyBytes) > 0 {
 		s.logger.Debug("   Request body: %s", truncateBody(bodyBytes, 1024))
 	}
 
-	headers := buildUpstreamHeaders(r.Header, provider)
+	headers := buildUpstreamHeaders(r.Header, s.provider)
 
 	resp, err := s.doWithRetry(r.Context(), r.Method, upstreamURL, bodyBytes, headers)
 	if err != nil {
@@ -154,6 +113,47 @@ func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request, provider
 
 	s.logger.Info("<- %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	pipeResponse(w, resp)
+}
+
+// ---------------------------------------------------------------------------
+// StartServers starts both OpenAI and Anthropic servers based on config.
+// ---------------------------------------------------------------------------
+
+// StartServers starts all configured protocol servers.
+func StartServers(cfg *config.Config, log *logger.Logger) error {
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+
+	start := func(protocol string, port int) {
+		defer wg.Done()
+		provider, ok := cfg.ActiveProvider(protocol)
+		if !ok {
+			log.Info("%s provider: (disabled)", protocol)
+			return
+		}
+		srv := NewServer(cfg, provider, log)
+		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, port)
+		if err := srv.Start(addr); err != nil {
+			errMu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			errMu.Unlock()
+		}
+	}
+
+	if port := cfg.Server.OpenaiPort; port > 0 {
+		wg.Add(1)
+		go start("openai", port)
+	}
+	if port := cfg.Server.AnthropicPort; port > 0 {
+		wg.Add(1)
+		go start("anthropic", port)
+	}
+
+	wg.Wait()
+	return firstErr
 }
 
 // ---------------------------------------------------------------------------

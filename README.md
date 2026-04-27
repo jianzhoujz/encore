@@ -27,14 +27,16 @@ You shouldn't have to babysit API calls. Your tools should just work.
 **Encore** is a lightweight local proxy that sits between your application and the upstream AI API. When a request gets rate-limited (or hits a transient server error), Encore absorbs the failure, waits, and retries — automatically. Your application sees a clean, successful response every time, as if the rate limit never existed.
 
 ```
-┌─────────────┐         ┌─────────┐         ┌──────────────┐
-│  Your App   │ ──────> │  Encore │ ──────> │  NVIDIA NIM  │
-│  (Zed, Claude│         │  :9090  │  429?   │  or any API  │
-│   Code, etc.)│ <────── │  retry! │ <────── │              │
-└─────────────┘   200 OK └─────────┘         └──────────────┘
+┌─────────────┐         ┌─────────────┐         ┌──────────────┐
+│  Your App   │ ──────> │    Encore   │ ──────> │  NVIDIA NIM  │
+│  (Zed,      │         │  :9090 /    │  429?   │  or any API  │
+│   Claude    │         │   :9091     │  retry! │              │
+│   Code, etc)│ <────── │  OpenAI /   │ <────── │              │
+└─────────────┘   200 OK│  Anthropic  │         └──────────────┘
+                        └─────────────┘
 ```
 
-**Zero code changes required.** Just point your app's API base URL to `localhost:9090` — that's it.
+**Zero code changes required.** Just point your app's API base URL to the correct port — that's it.
 
 ## Install
 
@@ -55,7 +57,7 @@ go build -o encore ./cmd/encore
 
 ```json
 {
-  "server": { "host": "127.0.0.1", "port": 9090 },
+  "server": { "host": "127.0.0.1", "openaiPort": 9090, "anthropicPort": 9091 },
   "log": { "consoleLevel": "info", "fileLevel": "debug" },
   "retry": { "maxRetries": 5, "retryInterval": 3000 },
   "activeProviders": { "openai": "nvidia-nim", "anthropic": "" },
@@ -78,11 +80,11 @@ encore start
 
 **3. Point your app to Encore** — just change the API base URL:
 
-| Client | Configuration |
-|---|---|
-| **Zed AI Panel** | Set `api_url` to `http://127.0.0.1:9090/v1` (see [details below](#zed--ai-panel)) |
-| **Claude Code** | `ANTHROPIC_BASE_URL=http://127.0.0.1:9090` |
-| **Any OpenAI client** | Set base URL to `http://127.0.0.1:9090/v1` |
+| Client | Port | Configuration |
+|---|---|---|
+| **Zed AI Panel** | OpenAI (`:9090`) | Set `api_url` to `http://127.0.0.1:9090/v1` (see [details below](#zed--ai-panel)) |
+| **Claude Code** | Anthropic (`:9091`) | `ANTHROPIC_BASE_URL=http://127.0.0.1:9091` |
+| **Any OpenAI client** | OpenAI (`:9090`) | Set base URL to `http://127.0.0.1:9090/v1` |
 
 Remove the API key from your app — Encore injects it automatically.
 
@@ -94,14 +96,15 @@ Remove the API key from your app — Encore injects it automatically.
 | Server 502/503 | Request lost | Auto-retry with backoff |
 | Masked errors (NIM) | Silent failure, wrong output | Detected and retried |
 | API key management | Scattered across apps | Single config, one place |
-| Protocol switching | Reconfigure everything | Same port, path-based routing |
+| Protocol switching | Reconfigure everything | Separate ports, zero confusion |
 
 ## Features
 
 - **Smart retry** — Handles 429, 502, 503, 504, network errors, and even [masked errors](#masked-error-detection) (NVIDIA NIM returning errors inside HTTP 200)
-- **Dual-protocol** — OpenAI and Anthropic (Claude Code) on the same port, routed by URL path
+- **Dual-port** — Separate OpenAI (`openaiPort`) and Anthropic (`anthropicPort`) servers. Each port is bound to one protocol, no path guessing needed.
+- **Custom model list** — Override the `/v1/models` response per provider with a local JSON file, so your clients see exactly the models you want
 - **Real-time streaming** — SSE responses are flushed chunk-by-chunk, no buffering delay
-- **Multiple providers** — Define as many upstreams as you want, activate one per protocol
+- **Multiple providers** — Define as many upstreams as you want, activate one per protocol via `activeProviders`
 - **Zero dependencies** — Pure Go standard library, single static binary
 - **Homebrew ready** — `brew install` and go
 
@@ -131,10 +134,8 @@ Remove the API key from your app — Encore injects it automatically.
 ### Claude Code
 
 ```bash
-ANTHROPIC_BASE_URL=http://127.0.0.1:9090
+ANTHROPIC_BASE_URL=http://127.0.0.1:9091
 ```
-
-For Anthropic protocol, configure a provider with `"protocol": "anthropic"` and activate it via `activeProviders.anthropic`.
 
 ### Other Clients
 
@@ -142,18 +143,19 @@ Any OpenAI-compatible tool — set the base URL to `http://127.0.0.1:9090/v1` an
 
 ## Masked Error Detection
 
-Some providers (notably NVIDIA NIM) occasionally return errors disguised as HTTP 200 — the body says `"rate limit exceeded"` but the status code looks fine. Most retry logic misses this entirely.
+Some providers (notably NVIDIA NIM) occasionally return errors disguised as HTTP 200 — the status code looks fine but the body says `"rate limit exceeded"`. Most retry logic misses this entirely.
 
 Encore catches these by inspecting short non-streaming 200 responses for known error patterns: `rate limit exceeded`, `too many requests`, `upstream connect error`, `gateway timeout`, `service unavailable`, and more. When detected, the request is retried just like a real 429.
 
 ## Configuration Reference
 
-All fields are required — Encore validates strictly and tells you exactly what's missing.
+Provider fields (`name`, `protocol`, `baseUrl`, `apiKey`) are required. `models` and `anthropicPort` are optional. Encore validates strictly and tells you exactly what's missing.
 
 | Field | Description |
 |---|---|
 | `server.host` | Listen address (e.g. `127.0.0.1`) |
-| `server.port` | Listen port (e.g. `9090`) |
+| `server.openaiPort` | OpenAI-protocol listen port (e.g. `9090`) |
+| `server.anthropicPort` | Anthropic-protocol listen port (e.g. `9091`). `0` = disabled |
 | `log.consoleLevel` | Console log level: `verbose` / `debug` / `info` / `error` |
 | `log.fileLevel` | File log level (logs to `~/Library/Logs/encore/`) |
 | `retry.maxRetries` | Max retry attempts per request |
@@ -164,6 +166,7 @@ All fields are required — Encore validates strictly and tells you exactly what
 | `providers.*.protocol` | `openai` or `anthropic` |
 | `providers.*.baseUrl` | Upstream base URL |
 | `providers.*.apiKey` | Upstream API key |
+| `providers.*.models` | (Optional) Custom model list JSON filename in config dir |
 
 ## Tested With
 
