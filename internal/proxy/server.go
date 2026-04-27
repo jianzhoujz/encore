@@ -220,6 +220,18 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 			}
 		}
 
+		// Check for rate-limit / server errors disguised as HTTP 400 (IdeaLab).
+		// Reads the body to detect retryable patterns; if not retryable, the
+		// response is passed through to the client unchanged.
+		if resp.StatusCode == http.StatusBadRequest && attempt < maxRetries {
+			if retryable, errMsg := checkFor400Error(resp); retryable {
+				s.logger.Info("   <- 400 Bad Request (retryable: %s)", truncateBody([]byte(errMsg), 200))
+				resp.Body.Close()
+				lastErr = fmt.Errorf("400 retryable: %s", errMsg)
+				continue
+			}
+		}
+
 		return resp, nil
 	}
 
@@ -378,6 +390,8 @@ var retryableBodyPatterns = []string{
 	"internal server error",
 	"service unavailable",
 	"server busy",
+	"模型提供方限流",
+	"限流",
 }
 
 // maxMaskedErrorBodySize is the maximum response body size (in bytes) we will
@@ -438,6 +452,72 @@ func checkForMaskedError(resp *http.Response) (retryable bool, errMsg string) {
 	}
 
 	// Strategy 2: short plain-text body with a known error pattern.
+	bodyStr := strings.TrimSpace(string(bodyBytes))
+	if len(bodyStr) <= 512 && isRetryableMessage(bodyStr) {
+		return true, bodyStr
+	}
+
+	return false, ""
+}
+
+// checkFor400Error reads the body of an HTTP 400 response and determines
+// whether it's a retryable error (e.g. rate-limit from IdeaLab disguised as
+// 400). Non-retryable 400s (bad request, invalid model, etc.) are returned
+// as-is. The response body is always restored for the caller.
+func checkFor400Error(resp *http.Response) (retryable bool, errMsg string) {
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/event-stream") {
+		return false, ""
+	}
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxMaskedErrorBodySize+1))
+	remaining, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if err != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		return false, ""
+	}
+
+	if len(bodyBytes) > maxMaskedErrorBodySize {
+		full := append(bodyBytes, remaining...)
+		resp.Body = io.NopCloser(bytes.NewReader(full))
+		return false, ""
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	// Check JSON error bodies for retryable patterns.
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(bodyBytes, &obj) == nil {
+		if errRaw, hasErr := obj["error"]; hasErr {
+			var errObj map[string]interface{}
+			if json.Unmarshal(errRaw, &errObj) == nil {
+				if msg, ok := errObj["message"].(string); ok && isRetryableMessage(msg) {
+					return true, msg
+				}
+				// Some APIs use "code" or "type" fields for error classification.
+				if code, ok := errObj["code"].(string); ok && isRetryableMessage(code) {
+					return true, code
+				}
+			}
+			var errStr string
+			if json.Unmarshal(errRaw, &errStr) == nil && isRetryableMessage(errStr) {
+				return true, errStr
+			}
+		}
+		// Also check top-level "message" or "code" fields.
+		for _, key := range []string{"message", "code", "msg", "error_message"} {
+			if raw, ok := obj[key]; ok {
+				var s string
+				if json.Unmarshal(raw, &s) == nil && isRetryableMessage(s) {
+					return true, s
+				}
+			}
+		}
+	}
+
+	// Check plain-text body.
 	bodyStr := strings.TrimSpace(string(bodyBytes))
 	if len(bodyStr) <= 512 && isRetryableMessage(bodyStr) {
 		return true, bodyStr
