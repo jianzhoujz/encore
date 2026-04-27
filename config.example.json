@@ -26,7 +26,8 @@
       "protocol": "openai",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "apiKey": "nvapi-xxxxxxxxxxxx",
-      "models": "models_openai.json"
+      "models": "models_openai.json",
+      "overrideModel": ""
     }
   }
 }

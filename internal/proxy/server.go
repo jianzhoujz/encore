@@ -96,6 +96,9 @@ func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("-> %s %s", r.Method, r.URL.Path)
 
+	// Override model name if configured.
+	bodyBytes = s.overrideModel(bodyBytes)
+
 	upstreamURL := buildUpstreamURL(s.provider, r.URL.Path, r.URL.RawQuery)
 	s.logger.Info("   Upstream: %s", upstreamURL)
 	if len(bodyBytes) > 0 {
@@ -242,6 +245,32 @@ func buildUpstreamURL(provider config.ProviderConfig, path, rawQuery string) str
 		u += "?" + rawQuery
 	}
 	return u
+}
+
+// overrideModel rewrites the "model" field in the request body JSON to the
+// configured OverrideModel value. If OverrideModel is empty or the body is not
+// valid JSON, the body is returned unchanged.
+func (s *Server) overrideModel(body []byte) []byte {
+	if s.provider.OverrideModel == "" || len(body) == 0 {
+		return body
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body
+	}
+
+	modelVal, err := json.Marshal(s.provider.OverrideModel)
+	if err != nil {
+		return body
+	}
+	obj["model"] = modelVal
+
+	rewritten, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return rewritten
 }
 
 // buildUpstreamHeaders creates a header set suitable for the upstream request

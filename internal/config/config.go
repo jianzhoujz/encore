@@ -46,11 +46,12 @@ type ActiveProvidersConfig struct {
 
 // ProviderConfig describes an upstream AI API provider.
 type ProviderConfig struct {
-	Name       string `json:"name"`
-	Protocol   string `json:"protocol"`   // "openai" | "anthropic"
-	BaseURL    string `json:"baseUrl"`
-	APIKey     string `json:"apiKey"`
-	ModelsFile string `json:"models"`     // optional: custom model list JSON filename
+	Name         string `json:"name"`
+	Protocol     string `json:"protocol"`   // "openai" | "anthropic"
+	BaseURL      string `json:"baseUrl"`
+	APIKey       string `json:"apiKey"`
+	ModelsFile   string `json:"models"`     // optional: custom model list JSON filename
+	OverrideModel string `json:"overrideModel"` // optional: force all requests to use this model name
 }
 
 // ConfigDir returns the path to the Encore config directory.

@@ -102,6 +102,7 @@ encore start
 - **智能重试** —— 处理 429、502、503、504、网络错误，甚至[伪装错误](#伪装错误检测)（NVIDIA NIM 在 HTTP 200 里返回错误信息）
 - **双端口架构** —— OpenAI 和 Anthropic 各自独立端口，每个端口绑定一个协议，无需路径判断
 - **自定义模型列表** —— 每个 provider 可配置本地 JSON 模型文件，客户端看到的模型由你决定
+- **模型名称覆盖** —— 强制所有请求使用指定的模型名称，覆盖客户端请求体中的 `model` 字段
 - **实时流式响应** —— SSE 逐块刷新，零缓冲延迟
 - **多 Provider** —— 定义任意数量的上游，通过 `activeProviders` 按协议激活
 - **零依赖** —— 纯 Go 标准库，单一静态二进制
@@ -145,6 +146,7 @@ Provider 字段（`name`、`protocol`、`baseUrl`、`apiKey`）为必填。`mode
 | `providers.*.baseUrl` | 上游 base URL |
 | `providers.*.apiKey` | 上游 API Key |
 | `providers.*.models` | （可选）自定义模型列表 JSON 文件名，存放于配置目录 |
+| `providers.*.overrideModel` | （可选）强制所有请求使用此模型名称，覆盖客户端的 `model` 字段 |
 
 ## 已测试平台
 

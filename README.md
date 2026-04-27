@@ -102,6 +102,7 @@ Remove the API key from your app — Encore injects it automatically.
 - **Smart retry** — Handles 429, 502, 503, 504, network errors, and even [masked errors](#masked-error-detection) (NVIDIA NIM returning errors inside HTTP 200)
 - **Dual-port** — Separate OpenAI (`openaiPort`) and Anthropic (`anthropicPort`) servers. Each port is bound to one protocol, no path guessing needed.
 - **Custom model list** — Override the `/v1/models` response per provider with a local JSON file, so your clients see exactly the models you want
+- **Model name override** — Force all requests to use a specific model name by overriding the `model` field in every request body
 - **Real-time streaming** — SSE responses are flushed chunk-by-chunk, no buffering delay
 - **Multiple providers** — Define as many upstreams as you want, activate one per protocol via `activeProviders`
 - **Zero dependencies** — Pure Go standard library, single static binary
@@ -145,6 +146,7 @@ Provider fields (`name`, `protocol`, `baseUrl`, `apiKey`) are required. `models`
 | `providers.*.baseUrl` | Upstream base URL |
 | `providers.*.apiKey` | Upstream API key |
 | `providers.*.models` | (Optional) Custom model list JSON filename in config dir |
+| `providers.*.overrideModel` | (Optional) Force all requests to use this model name, overriding the client's `model` field |
 
 ## Tested With
 
