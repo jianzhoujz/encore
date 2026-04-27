@@ -29,8 +29,8 @@
 ```
 ┌──────────────┐         ┌─────────────┐         ┌──────────────┐
 │   你的应用    │ ──────> │    Encore   │ ──────> │  NVIDIA NIM  │
-│ (Zed, Claude │         │ :9090 /     │  429?   │  或其他 API   │
-│  Code 等)    │         │  :9091      │  重试！  │              │
+│ (Claude Code│         │ :9090 /     │  429?   │  或其他 API   │
+│  等)        │         │  :9091      │  重试！  │              │
 └──────────────┘ <────── │ OpenAI /    │ <────── │              │
               200 OK     │ Anthropic   │         └──────────────┘
                          └─────────────┘
@@ -82,7 +82,6 @@ encore start
 
 | 客户端 | 端口 | 配置方式 |
 |---|---|---|
-| **Zed AI 面板** | OpenAI (`:9090`) | 将 `api_url` 设为 `http://127.0.0.1:9090/v1`（[详见下方](#zed--ai-面板)） |
 | **Claude Code** | Anthropic (`:9091`) | `ANTHROPIC_BASE_URL=http://127.0.0.1:9091` |
 | **其他 OpenAI 兼容客户端** | OpenAI (`:9090`) | 将 base URL 设为 `http://127.0.0.1:9090/v1` |
 
@@ -109,27 +108,6 @@ encore start
 - **Homebrew 支持** —— `brew install` 即装即用
 
 ## 客户端配置
-
-### Zed — AI 面板
-
-```json
-{
-  "language_models": {
-    "openai_compatible": {
-      "Encore": {
-        "api_url": "http://127.0.0.1:9090/v1",
-        "available_models": [
-          {
-            "name": "deepseek-ai/deepseek-v3.2",
-            "display_name": "DeepSeek V3.2",
-            "max_tokens": 65536
-          }
-        ]
-      }
-    }
-  }
-}
-```
 
 ### Claude Code
 
@@ -171,7 +149,6 @@ Provider 字段（`name`、`protocol`、`baseUrl`、`apiKey`）为必填。`mode
 ## 已测试平台
 
 - **NVIDIA NIM** — DeepSeek V3.2、DeepSeek V4 系列（免费额度，约 40 RPM）
-- **Zed** AI 面板（OpenAI 兼容协议）
 - **Claude Code**（Anthropic 协议）
 
 ## 许可证

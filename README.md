@@ -29,10 +29,10 @@ You shouldn't have to babysit API calls. Your tools should just work.
 ```
 ┌─────────────┐         ┌─────────────┐         ┌──────────────┐
 │  Your App   │ ──────> │    Encore   │ ──────> │  NVIDIA NIM  │
-│  (Zed,      │         │  :9090 /    │  429?   │  or any API  │
-│   Claude    │         │   :9091     │  retry! │              │
-│   Code, etc)│ <────── │  OpenAI /   │ <────── │              │
-└─────────────┘   200 OK│  Anthropic  │         └──────────────┘
+│  (Claude    │         │  :9090 /    │  429?   │  or any API  │
+│   Code, etc)│ <────── │   :9091     │  retry! │              │
+└─────────────┘   200 OK│  OpenAI /   │ <────── │              │
+                        │  Anthropic  │         └──────────────┘
                         └─────────────┘
 ```
 
@@ -82,7 +82,6 @@ encore start
 
 | Client | Port | Configuration |
 |---|---|---|
-| **Zed AI Panel** | OpenAI (`:9090`) | Set `api_url` to `http://127.0.0.1:9090/v1` (see [details below](#zed--ai-panel)) |
 | **Claude Code** | Anthropic (`:9091`) | `ANTHROPIC_BASE_URL=http://127.0.0.1:9091` |
 | **Any OpenAI client** | OpenAI (`:9090`) | Set base URL to `http://127.0.0.1:9090/v1` |
 
@@ -109,27 +108,6 @@ Remove the API key from your app — Encore injects it automatically.
 - **Homebrew ready** — `brew install` and go
 
 ## Client Configuration
-
-### Zed — AI Panel
-
-```json
-{
-  "language_models": {
-    "openai_compatible": {
-      "Encore": {
-        "api_url": "http://127.0.0.1:9090/v1",
-        "available_models": [
-          {
-            "name": "deepseek-ai/deepseek-v3.2",
-            "display_name": "DeepSeek V3.2",
-            "max_tokens": 65536
-          }
-        ]
-      }
-    }
-  }
-}
-```
 
 ### Claude Code
 
@@ -171,7 +149,6 @@ Provider fields (`name`, `protocol`, `baseUrl`, `apiKey`) are required. `models`
 ## Tested With
 
 - **NVIDIA NIM** — DeepSeek V3.2, DeepSeek V4 series (free tier, ~40 RPM)
-- **Zed** AI Panel (OpenAI-compatible)
 - **Claude Code** (Anthropic protocol)
 
 ## License
