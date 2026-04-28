@@ -202,8 +202,17 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 			return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
 		}
 
+		// Read and log response body for all status codes.
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxMaskedErrorBodySize+1))
+		remaining, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		fullBody := append(bodyBytes, remaining...)
+		resp.Body = io.NopCloser(bytes.NewReader(fullBody))
+
+		bodyPreview := truncateBody(fullBody, 200)
+
 		if isRetryable(resp.StatusCode) && attempt < maxRetries {
-			s.logger.Info("   <- %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+			s.logger.Info("   <- %d %s (body: %s)", resp.StatusCode, http.StatusText(resp.StatusCode), bodyPreview)
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
@@ -213,11 +222,13 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		// "rate limit exceeded" or "gateway timeout" as plain-text 200 responses).
 		if resp.StatusCode == http.StatusOK && attempt < maxRetries {
 			if retryable, errMsg := checkForMaskedError(resp); retryable {
-				s.logger.Info("   <- 200 OK (masked error: %s)", truncateBody([]byte(errMsg), 200))
+				s.logger.Info("   <- 200 OK (masked error: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
 				resp.Body.Close()
 				lastErr = fmt.Errorf("masked error: %s", errMsg)
 				continue
 			}
+			s.logger.Info("   <- 200 OK (body: %s)", bodyPreview)
+			return resp, nil
 		}
 
 		// Check for rate-limit / server errors disguised as HTTP 400 (IdeaLab).
@@ -225,13 +236,17 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		// response is passed through to the client unchanged.
 		if resp.StatusCode == http.StatusBadRequest && attempt < maxRetries {
 			if retryable, errMsg := checkFor400Error(resp); retryable {
-				s.logger.Info("   <- 400 Bad Request (retryable: %s)", truncateBody([]byte(errMsg), 200))
+				s.logger.Info("   <- 400 Bad Request (retryable: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
 				resp.Body.Close()
 				lastErr = fmt.Errorf("400 retryable: %s", errMsg)
 				continue
 			}
+			s.logger.Info("   <- 400 Bad Request (body: %s)", bodyPreview)
+			return resp, nil
 		}
 
+		// For all other status codes, log and return.
+		s.logger.Info("   <- %d %s (body: %s)", resp.StatusCode, http.StatusText(resp.StatusCode), bodyPreview)
 		return resp, nil
 	}
 
