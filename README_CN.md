@@ -45,6 +45,13 @@ brew tap jianzhoujz/tap
 brew install encore
 ```
 
+升级：
+
+```bash
+brew update --force
+brew upgrade encore
+```
+
 或从源码构建：
 
 ```bash
