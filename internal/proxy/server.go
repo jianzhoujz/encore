@@ -395,15 +395,19 @@ func truncateBody(body []byte, maxLen int) string {
 // using proper 4xx/5xx status codes. We detect these by inspecting the body of
 // short, non-streaming 200 responses.
 
-// retryableBodyPatterns are substrings that, when found in a short HTTP 200
-// response body, indicate the upstream returned a retryable error.
+// retryableBodyPatterns are substrings that indicate the upstream returned a
+// retryable error.
 var retryableBodyPatterns = []string{
 	"rate limit exceeded",
 	"too many requests",
+	"requests are being throttled",
+	"throttled",
+	"throttling",
 	"upstream connect error",
 	"gateway timeout",
 	"internal server error",
 	"service unavailable",
+	"system capacity limits",
 	"server busy",
 	"模型提供方限流",
 	"限流",
@@ -413,6 +417,10 @@ var retryableBodyPatterns = []string{
 // inspect for masked errors. Real AI completions are typically much larger, so
 // a small cap avoids false positives and keeps the check lightweight.
 const maxMaskedErrorBodySize = 1024
+
+// maxRetryableErrorBodySize is the maximum error response body size (in bytes)
+// we will inspect for retryable patterns in non-200 responses.
+const maxRetryableErrorBodySize = 16 * 1024
 
 // checkForMaskedError reads the body of an HTTP 200 non-streaming response and
 // checks whether it actually contains an error message. If so, it returns
@@ -485,7 +493,7 @@ func checkFor400Error(resp *http.Response) (retryable bool, errMsg string) {
 		return false, ""
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxMaskedErrorBodySize+1))
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxRetryableErrorBodySize+1))
 	remaining, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -494,7 +502,7 @@ func checkFor400Error(resp *http.Response) (retryable bool, errMsg string) {
 		return false, ""
 	}
 
-	if len(bodyBytes) > maxMaskedErrorBodySize {
+	if len(bodyBytes) > maxRetryableErrorBodySize {
 		full := append(bodyBytes, remaining...)
 		resp.Body = io.NopCloser(bytes.NewReader(full))
 		return false, ""
@@ -503,32 +511,10 @@ func checkFor400Error(resp *http.Response) (retryable bool, errMsg string) {
 	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Check JSON error bodies for retryable patterns.
-	var obj map[string]json.RawMessage
-	if json.Unmarshal(bodyBytes, &obj) == nil {
-		if errRaw, hasErr := obj["error"]; hasErr {
-			var errObj map[string]interface{}
-			if json.Unmarshal(errRaw, &errObj) == nil {
-				if msg, ok := errObj["message"].(string); ok && isRetryableMessage(msg) {
-					return true, msg
-				}
-				// Some APIs use "code" or "type" fields for error classification.
-				if code, ok := errObj["code"].(string); ok && isRetryableMessage(code) {
-					return true, code
-				}
-			}
-			var errStr string
-			if json.Unmarshal(errRaw, &errStr) == nil && isRetryableMessage(errStr) {
-				return true, errStr
-			}
-		}
-		// Also check top-level "message" or "code" fields.
-		for _, key := range []string{"message", "code", "msg", "error_message"} {
-			if raw, ok := obj[key]; ok {
-				var s string
-				if json.Unmarshal(raw, &s) == nil && isRetryableMessage(s) {
-					return true, s
-				}
-			}
+	var bodyJSON interface{}
+	if json.Unmarshal(bodyBytes, &bodyJSON) == nil {
+		if msg, ok := findRetryableMessage(bodyJSON, 4); ok {
+			return true, msg
 		}
 	}
 
@@ -551,4 +537,44 @@ func isRetryableMessage(msg string) bool {
 		}
 	}
 	return false
+}
+
+// findRetryableMessage walks decoded JSON and returns the first string value
+// that contains a retryable error pattern. Some gateways put provider errors in
+// fields such as "detailMessage" as an escaped JSON string, so string values
+// that look like JSON are decoded and checked recursively.
+func findRetryableMessage(value interface{}, depth int) (string, bool) {
+	if depth <= 0 {
+		return "", false
+	}
+
+	switch v := value.(type) {
+	case string:
+		if isRetryableMessage(v) {
+			return v, true
+		}
+		trimmed := strings.TrimSpace(v)
+		if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+			return "", false
+		}
+		var nested interface{}
+		if json.Unmarshal([]byte(trimmed), &nested) != nil {
+			return "", false
+		}
+		return findRetryableMessage(nested, depth-1)
+	case map[string]interface{}:
+		for _, nested := range v {
+			if msg, ok := findRetryableMessage(nested, depth-1); ok {
+				return msg, true
+			}
+		}
+	case []interface{}:
+		for _, nested := range v {
+			if msg, ok := findRetryableMessage(nested, depth-1); ok {
+				return msg, true
+			}
+		}
+	}
+
+	return "", false
 }
