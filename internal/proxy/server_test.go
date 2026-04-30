@@ -38,6 +38,33 @@ func TestCheckFor400ErrorLeavesValidationErrorNonRetryable(t *testing.T) {
 	}
 }
 
+func TestOSC9NotificationSequenceSanitizesControlCharacters(t *testing.T) {
+	seq := osc9NotificationSequence("Encore retry\n1/3: too many requests\x1b]9;injected\x07")
+
+	if !strings.HasPrefix(seq, "\x1b]9;") {
+		t.Fatalf("expected OSC 9 prefix, got %q", seq)
+	}
+	if !strings.HasSuffix(seq, "\x07") {
+		t.Fatalf("expected BEL terminator, got %q", seq)
+	}
+
+	payload := strings.TrimSuffix(strings.TrimPrefix(seq, "\x1b]9;"), "\x07")
+	if strings.ContainsAny(payload, "\x00\x07\x1b\n\r\t") {
+		t.Fatalf("payload contains unsafe control characters: %q", payload)
+	}
+	if !strings.Contains(payload, "Encore retry 1/3: too many requests") {
+		t.Fatalf("expected sanitized retry message, got %q", payload)
+	}
+}
+
+func TestRetryableStatusReasonIncludesStatusAndBody(t *testing.T) {
+	got := retryableStatusReason(http.StatusTooManyRequests, `{"error":"too many requests"}`)
+	want := `HTTP 429 Too Many Requests: {"error":"too many requests"}`
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
 func responseWithBody(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,

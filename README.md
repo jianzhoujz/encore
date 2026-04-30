@@ -111,6 +111,7 @@ Remove the API key from your app — Encore injects it automatically.
 - **Custom model list** — Override the `/v1/models` response per provider with a local JSON file, so your clients see exactly the models you want
 - **Model name override** — Force all requests to use a specific model name by overriding the `model` field in every request body
 - **Real-time streaming** — SSE responses are flushed chunk-by-chunk, no buffering delay
+- **Terminal-native retry notifications** — Emits Claude Code-style OSC 9 desktop notifications when a request retries or finally fails. Unsupported terminals silently ignore them
 - **Multiple providers** — Define as many upstreams as you want, activate one per protocol via `activeProviders`
 - **Zero dependencies** — Pure Go standard library, single static binary
 - **Homebrew ready** — `brew install` and go
@@ -132,6 +133,10 @@ Any OpenAI-compatible tool — set the base URL to `http://127.0.0.1:9090/v1` an
 Some providers (notably NVIDIA NIM) occasionally return errors disguised as HTTP 200 — the status code looks fine but the body says `"rate limit exceeded"`. Most retry logic misses this entirely.
 
 Encore catches these by inspecting short non-streaming 200 responses for known error patterns: `rate limit exceeded`, `too many requests`, `upstream connect error`, `gateway timeout`, `service unavailable`, and more. When detected, the request is retried just like a real 429.
+
+## Terminal Notifications
+
+When a request is retried or finally fails after all retries, Encore writes an iTerm2-style OSC 9 notification sequence to the controlling terminal, the same terminal-native mechanism used by Claude Code. Terminals such as iTerm2, Ghostty, Kitty, WezTerm, Warp, and Rio can surface these as desktop notifications. Terminals that do not support OSC 9 ignore the sequence.
 
 ## Configuration Reference
 

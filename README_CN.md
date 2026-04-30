@@ -111,6 +111,7 @@ encore start
 - **自定义模型列表** —— 每个 provider 可配置本地 JSON 模型文件，客户端看到的模型由你决定
 - **模型名称覆盖** —— 强制所有请求使用指定的模型名称，覆盖客户端请求体中的 `model` 字段
 - **实时流式响应** —— SSE 逐块刷新，零缓冲延迟
+- **终端原生重试通知** —— 请求重试或最终失败时发送 Claude Code 风格的 OSC 9 桌面通知；不支持的终端会静默忽略
 - **多 Provider** —— 定义任意数量的上游，通过 `activeProviders` 按协议激活
 - **零依赖** —— 纯 Go 标准库，单一静态二进制
 - **Homebrew 支持** —— `brew install` 即装即用
@@ -132,6 +133,10 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:9091
 部分上游（特别是 NVIDIA NIM）偶尔会将错误伪装成 HTTP 200 返回 —— 状态码看起来正常，但 body 实际内容是 `"rate limit exceeded"` 之类的错误信息。大多数重试逻辑对此完全无能为力。
 
 Encore 会检查短小的非流式 200 响应体，识别已知错误模式：`rate limit exceeded`、`too many requests`、`upstream connect error`、`gateway timeout`、`service unavailable` 等。一旦检测到，该请求会像真正的 429 一样被自动重试。
+
+## 终端通知
+
+当请求发生重试，或所有重试都失败时，Encore 会向当前控制终端写入 iTerm2 风格的 OSC 9 通知序列，和 Claude Code 的终端原生通知机制一致。iTerm2、Ghostty、Kitty、WezTerm、Warp、Rio 等终端可将其显示为桌面通知；不支持 OSC 9 的终端会直接忽略。
 
 ## 配置参考
 

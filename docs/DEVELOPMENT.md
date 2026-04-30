@@ -99,6 +99,10 @@ Retryable patterns (case-insensitive substring match): `rate limit exceeded`, `t
 
 Responses with `choices` in the JSON body are never treated as masked errors regardless of content, and streaming responses (`text/event-stream`) bypass this check entirely.
 
+### Terminal Notifications
+
+On every retry and on final retry exhaustion, Encore writes an iTerm2-style OSC 9 desktop-notification sequence to `/dev/tty`. This mirrors Claude Code's terminal-native notification behavior: terminals that support OSC 9 (including iTerm2, Ghostty, Kitty, WezTerm, Warp, and Rio) may surface it as a desktop notification, while unsupported terminals ignore it. Encore does not fall back to hooks, AppleScript, or any external notification command.
+
 ### Build & Run
 
 ```bash

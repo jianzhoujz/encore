@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -196,9 +197,12 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		if err != nil {
 			lastErr = err
 			s.logger.Error("Request failed: %s", err)
+			reason := fmt.Sprintf("request failed: %s", err)
 			if attempt < maxRetries {
+				s.notifyRetry(attempt+1, maxRetries, retryInterval, reason)
 				continue
 			}
+			s.notifyFailure(maxRetries, reason)
 			return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
 		}
 
@@ -211,20 +215,34 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 
 		bodyPreview := truncateBody(fullBody, 200)
 
-		if isRetryable(resp.StatusCode) && attempt < maxRetries {
+		if isRetryable(resp.StatusCode) {
+			reason := retryableStatusReason(resp.StatusCode, bodyPreview)
+			if attempt >= maxRetries {
+				s.notifyFailure(maxRetries, reason)
+				s.logger.Info("   <- %d %s (body: %s)", resp.StatusCode, http.StatusText(resp.StatusCode), bodyPreview)
+				return resp, nil
+			}
 			s.logger.Info("   <- %d %s (body: %s)", resp.StatusCode, http.StatusText(resp.StatusCode), bodyPreview)
+			s.notifyRetry(attempt+1, maxRetries, retryInterval, reason)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			lastErr = fmt.Errorf("%s", reason)
 			continue
 		}
 
 		// Check for errors masquerading as HTTP 200 (e.g. NVIDIA NIM returns
 		// "rate limit exceeded" or "gateway timeout" as plain-text 200 responses).
-		if resp.StatusCode == http.StatusOK && attempt < maxRetries {
+		if resp.StatusCode == http.StatusOK {
 			if retryable, errMsg := checkForMaskedError(resp); retryable {
+				reason := fmt.Sprintf("masked 200 OK error: %s", errMsg)
+				if attempt >= maxRetries {
+					s.notifyFailure(maxRetries, reason)
+					s.logger.Info("   <- 200 OK (masked error: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
+					return resp, nil
+				}
 				s.logger.Info("   <- 200 OK (masked error: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
+				s.notifyRetry(attempt+1, maxRetries, retryInterval, reason)
 				resp.Body.Close()
-				lastErr = fmt.Errorf("masked error: %s", errMsg)
+				lastErr = fmt.Errorf("%s", reason)
 				continue
 			}
 			s.logger.Info("   <- 200 OK (body: %s)", bodyPreview)
@@ -234,11 +252,18 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		// Check for rate-limit / server errors disguised as HTTP 400 (IdeaLab).
 		// Reads the body to detect retryable patterns; if not retryable, the
 		// response is passed through to the client unchanged.
-		if resp.StatusCode == http.StatusBadRequest && attempt < maxRetries {
+		if resp.StatusCode == http.StatusBadRequest {
 			if retryable, errMsg := checkFor400Error(resp); retryable {
+				reason := fmt.Sprintf("retryable 400 Bad Request: %s", errMsg)
+				if attempt >= maxRetries {
+					s.notifyFailure(maxRetries, reason)
+					s.logger.Info("   <- 400 Bad Request (retryable: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
+					return resp, nil
+				}
 				s.logger.Info("   <- 400 Bad Request (retryable: %s, body: %s)", truncateBody([]byte(errMsg), 200), bodyPreview)
+				s.notifyRetry(attempt+1, maxRetries, retryInterval, reason)
 				resp.Body.Close()
-				lastErr = fmt.Errorf("400 retryable: %s", errMsg)
+				lastErr = fmt.Errorf("%s", reason)
 				continue
 			}
 			s.logger.Info("   <- 400 Bad Request (body: %s)", bodyPreview)
@@ -377,6 +402,14 @@ func isRetryable(statusCode int) bool {
 	return false
 }
 
+func retryableStatusReason(statusCode int, bodyPreview string) string {
+	reason := fmt.Sprintf("HTTP %d %s", statusCode, http.StatusText(statusCode))
+	if bodyPreview == "" {
+		return reason
+	}
+	return fmt.Sprintf("%s: %s", reason, bodyPreview)
+}
+
 // truncateBody returns the body as a string, truncated to maxLen bytes with
 // an ellipsis suffix if it exceeds that length. Used for debug logging.
 func truncateBody(body []byte, maxLen int) string {
@@ -384,6 +417,58 @@ func truncateBody(body []byte, maxLen int) string {
 		return string(body)
 	}
 	return string(body[:maxLen]) + "...(truncated)"
+}
+
+func (s *Server) notifyRetry(retryAttempt, maxRetries int, retryInterval time.Duration, reason string) {
+	sendTerminalNotification(fmt.Sprintf("Encore retry %d/%d in %s: %s", retryAttempt, maxRetries, retryInterval, reason))
+}
+
+func (s *Server) notifyFailure(maxRetries int, reason string) {
+	sendTerminalNotification(fmt.Sprintf("Encore failed after %d retries: %s", maxRetries, reason))
+}
+
+func sendTerminalNotification(message string) {
+	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	if err != nil {
+		return
+	}
+	defer tty.Close()
+
+	notification := osc9NotificationSequence(message)
+	if notification == "" {
+		return
+	}
+	_, _ = tty.WriteString(notification)
+}
+
+func osc9NotificationSequence(message string) string {
+	message = sanitizeNotificationMessage(message)
+	if message == "" {
+		return ""
+	}
+	return "\x1b]9;" + message + "\x07"
+}
+
+func sanitizeNotificationMessage(message string) string {
+	message = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return ' '
+		}
+		return r
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	return truncateString(message, 180)
+}
+
+func truncateString(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 // ---------------------------------------------------------------------------
