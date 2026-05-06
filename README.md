@@ -7,7 +7,7 @@
     <a href="https://github.com/jianzhoujz/encore/releases"><img src="https://img.shields.io/github/v/release/jianzhoujz/encore?style=flat-square&color=blue" alt="Release"></a>
     <a href="https://github.com/jianzhoujz/encore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/jianzhoujz/encore?style=flat-square" alt="License"></a>
     <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform"></a>
-    <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Dependencies"></a>
+    <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/dependencies-1-brightgreen?style=flat-square" alt="Dependencies"></a>
   </p>
   <p align="center">
     <a href="./README_CN.md">中文文档</a>
@@ -114,7 +114,7 @@ Remove the API key from your app — Encore injects it automatically.
 - **Real-time streaming** — SSE responses are flushed chunk-by-chunk, no buffering delay
 - **Terminal-native retry notifications** — Emits Claude Code-style OSC 9 desktop notifications when a request retries or finally fails. Unsupported terminals silently ignore them
 - **Multiple providers** — Define as many upstreams as you want, activate one per protocol via `activeProviders`
-- **Zero dependencies** — Pure Go standard library, single static binary
+- **Minimal dependencies** — Single static binary, only `klauspost/compress` for zstd response decoding (otherwise pure stdlib)
 - **Homebrew ready** — `brew install` and go
 
 ## Client Configuration

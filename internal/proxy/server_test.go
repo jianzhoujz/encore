@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestCheckFor400ErrorDetectsNestedDetailMessageThrottle(t *testing.T) {
@@ -44,6 +46,28 @@ func TestDecodeBodyGzip(t *testing.T) {
 	}
 
 	headers := http.Header{"Content-Encoding": []string{"gzip"}}
+	got := decodeBody(headers, buf.Bytes())
+	if string(got) != original {
+		t.Fatalf("expected decoded body %q, got %q", original, got)
+	}
+}
+
+func TestDecodeBodyZstd(t *testing.T) {
+	original := `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"service unavailable"}}`
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("zstd writer: %v", err)
+	}
+	if _, err := zw.Write([]byte(original)); err != nil {
+		t.Fatalf("zstd write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+
+	headers := http.Header{"Content-Encoding": []string{"zstd"}}
 	got := decodeBody(headers, buf.Bytes())
 	if string(got) != original {
 		t.Fatalf("expected decoded body %q, got %q", original, got)

@@ -7,7 +7,7 @@
     <a href="https://github.com/jianzhoujz/encore/releases"><img src="https://img.shields.io/github/v/release/jianzhoujz/encore?style=flat-square&color=blue" alt="Release"></a>
     <a href="https://github.com/jianzhoujz/encore/blob/main/LICENSE"><img src="https://img.shields.io/github/license/jianzhoujz/encore?style=flat-square" alt="License"></a>
     <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square" alt="Platform"></a>
-    <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Dependencies"></a>
+    <a href="https://github.com/jianzhoujz/encore"><img src="https://img.shields.io/badge/dependencies-1-brightgreen?style=flat-square" alt="Dependencies"></a>
   </p>
   <p align="center">
     <a href="./README.md">English</a>
@@ -114,7 +114,7 @@ encore start
 - **实时流式响应** —— SSE 逐块刷新，零缓冲延迟
 - **终端原生重试通知** —— 请求重试或最终失败时发送 Claude Code 风格的 OSC 9 桌面通知；不支持的终端会静默忽略
 - **多 Provider** —— 定义任意数量的上游，通过 `activeProviders` 按协议激活
-- **零依赖** —— 纯 Go 标准库，单一静态二进制
+- **极简依赖** —— 单一静态二进制，仅依赖 `klauspost/compress` 用于解压 zstd 响应，其余全部 Go 标准库
 - **Homebrew 支持** —— `brew install` 即装即用
 
 ## 客户端配置

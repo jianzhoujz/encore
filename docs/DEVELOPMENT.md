@@ -124,4 +124,4 @@ go build -o encore ./cmd/encore
 
 ### Dependencies
 
-Zero external dependencies. The entire project uses only Go's standard library.
+One external dependency: `github.com/klauspost/compress` (pure Go) for zstd response decoding. The Go standard library does not include zstd, but IdeaLab compresses some responses (including SSE-formatted error bodies returned with non-streaming `Content-Type`) with zstd; without decoding those, masked-error detection cannot inspect the payload and the request silently passes through. Everything else uses only the standard library.

@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/jianzhoujz/encore/internal/config"
 	"github.com/jianzhoujz/encore/internal/logger"
 )
@@ -472,11 +474,14 @@ func isStreamingResponse(resp *http.Response) bool {
 }
 
 // decodeBody returns the decompressed body for known Content-Encoding schemes
-// (gzip, deflate). For empty/identity/unknown encodings, or on decode failure,
-// the raw body is returned unchanged. The Go http.Transport only auto-decodes
-// gzip when the caller did not set its own Accept-Encoding; since the proxy
-// forwards the client's Accept-Encoding header verbatim, upstream responses
-// stay encoded and we must decode here for logging and error inspection.
+// (gzip, deflate, zstd). For empty/identity/unknown encodings, or on decode
+// failure, the raw body is returned unchanged. The Go http.Transport only
+// auto-decodes gzip when the caller did not set its own Accept-Encoding; since
+// the proxy forwards the client's Accept-Encoding header verbatim, upstream
+// responses stay encoded and we must decode here for logging and error
+// inspection. zstd is needed for IdeaLab, which compresses error responses
+// (including SSE-formatted error bodies returned with non-streaming
+// Content-Type) with zstd.
 func decodeBody(headers http.Header, body []byte) []byte {
 	if len(body) == 0 {
 		return body
@@ -495,6 +500,17 @@ func decodeBody(headers http.Header, body []byte) []byte {
 		return out
 	case "deflate":
 		r := flate.NewReader(bytes.NewReader(body))
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return body
+		}
+		return out
+	case "zstd":
+		r, err := zstd.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body
+		}
 		defer r.Close()
 		out, err := io.ReadAll(r)
 		if err != nil {
