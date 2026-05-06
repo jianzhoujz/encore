@@ -9,7 +9,7 @@ import (
 	"github.com/jianzhoujz/encore/internal/proxy"
 )
 
-var version = "0.3.6"
+var version = "0.3.7"
 
 func main() {
 	if len(os.Args) < 2 {

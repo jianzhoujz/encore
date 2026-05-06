@@ -107,6 +107,7 @@ Remove the API key from your app — Encore injects it automatically.
 ## Features
 
 - **Smart retry** — Handles 429, 502, 503, 504, network errors, and even [masked errors](#masked-error-detection) (NVIDIA NIM returning errors inside HTTP 200)
+- **Serialized retries** — Upstream calls are serialized per provider, so concurrent clients can never compound a per-minute rate limit by retrying in parallel
 - **Dual-port** — Separate OpenAI (`openaiPort`) and Anthropic (`anthropicPort`) servers. Each port is bound to one protocol, no path guessing needed.
 - **Custom model list** — Override the `/v1/models` response per provider with a local JSON file, so your clients see exactly the models you want
 - **Model name override** — Force all requests to use a specific model name by overriding the `model` field in every request body

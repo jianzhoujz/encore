@@ -26,6 +26,14 @@ type Server struct {
 	config   *config.Config
 	logger   *logger.Logger
 	client   *http.Client
+
+	// upstreamMu serializes upstream calls so that at most one request is
+	// in-flight per provider. Upstream rate limits are typically per-minute
+	// quotas, so concurrent retries from multiple clients would compound the
+	// problem. Held across the entire doWithRetry loop — including sleeps
+	// between attempts — and released as soon as a final response is returned
+	// (or, for SSE, as soon as the response headers arrive).
+	upstreamMu sync.Mutex
 }
 
 // NewServer creates a proxy Server bound to a specific upstream provider.
@@ -54,7 +62,7 @@ func NewServer(cfg *config.Config, provider config.ProviderConfig, log *logger.L
 func (s *Server) Start(addr string) error {
 	s.logger.Info("Starting Encore proxy server on %s (%s -> %s)",
 		addr, s.provider.Name, s.provider.BaseURL)
-	s.logger.Info("Retry policy: max %d retries, %dms interval",
+	s.logger.Info("Retry policy: max %d retries, %dms interval (upstream calls serialized per provider)",
 		s.config.Retry.MaxRetries, s.config.Retry.RetryInterval)
 
 	mux := http.NewServeMux()
@@ -110,7 +118,9 @@ func (s *Server) proxyWithRetry(w http.ResponseWriter, r *http.Request) {
 
 	headers := buildUpstreamHeaders(r.Header, s.provider)
 
+	s.upstreamMu.Lock()
 	resp, err := s.doWithRetry(r.Context(), r.Method, upstreamURL, bodyBytes, headers)
+	s.upstreamMu.Unlock()
 	if err != nil {
 		s.logger.Error("Upstream request failed: %s", err)
 		http.Error(w, "upstream request failed after retries", http.StatusBadGateway)

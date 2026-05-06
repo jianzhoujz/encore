@@ -86,6 +86,12 @@ All other HTTP status codes are passed through to the client immediately.
 
 When a retryable condition is encountered, the proxy sleeps for `retryInterval` milliseconds and then replays the exact same request. After `maxRetries` consecutive failures, the last error or status code is returned to the client.
 
+#### Serialized Upstream Calls
+
+Upstream rate limits are typically per-minute quotas. If multiple in-flight requests all hit a 429 simultaneously and retry in parallel, they compound the problem instead of recovering from it. To prevent this, each `Server` holds a per-provider mutex (`upstreamMu`) that serializes upstream calls: at most one request is in-flight to a given provider at any time, in FIFO order. The lock is acquired before `doWithRetry` and held across all retry attempts (including the `retryInterval` sleeps) so that a single request fully completes its retry budget before the next one begins. The lock is released as soon as the upstream returns a final response — for streaming (SSE) responses, that means as soon as the response headers arrive, so streaming bodies do not block subsequent requests.
+
+The two protocol servers (OpenAI and Anthropic) are independent `Server` instances and therefore have independent locks; they do not block each other.
+
 #### Masked-Error Detection (NVIDIA NIM workaround)
 
 Some upstream providers — most notably NVIDIA NIM — occasionally return errors disguised as HTTP 200 responses: the body contains an error message string rather than a valid completion. This is non-compliant with the OpenAI API specification but is a confirmed behavior documented in the NVIDIA developer forums.
