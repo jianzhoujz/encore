@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -206,14 +208,17 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 			return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
 		}
 
-		// Read and log response body for all status codes.
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxMaskedErrorBodySize+1))
-		remaining, _ := io.ReadAll(resp.Body)
+		// Read response body once for logging and inspection. The original
+		// (still-encoded) bytes are preserved on resp.Body so pipeResponse can
+		// forward them verbatim to the client; a decoded copy is used for our
+		// own logs and retry-detection logic so we never blast raw gzip/deflate
+		// bytes (which contain BEL / ESC) to the proxy's terminal.
+		fullBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		fullBody := append(bodyBytes, remaining...)
 		resp.Body = io.NopCloser(bytes.NewReader(fullBody))
 
-		bodyPreview := truncateBody(fullBody, 200)
+		decodedBody := decodeBody(resp.Header, fullBody)
+		bodyPreview := truncateBody(decodedBody, 200)
 
 		if isRetryable(resp.StatusCode) {
 			reason := retryableStatusReason(resp.StatusCode, bodyPreview)
@@ -232,7 +237,7 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		// Check for errors masquerading as HTTP 200 (e.g. NVIDIA NIM returns
 		// "rate limit exceeded" or "gateway timeout" as plain-text 200 responses).
 		if resp.StatusCode == http.StatusOK {
-			if retryable, errMsg := checkForMaskedError(resp); retryable {
+			if retryable, errMsg := checkForMaskedError(resp, decodedBody); retryable {
 				reason := fmt.Sprintf("masked 200 OK error: %s", errMsg)
 				if attempt >= maxRetries {
 					s.notifyFailure(maxRetries, reason)
@@ -253,7 +258,7 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 		// Reads the body to detect retryable patterns; if not retryable, the
 		// response is passed through to the client unchanged.
 		if resp.StatusCode == http.StatusBadRequest {
-			if retryable, errMsg := checkFor400Error(resp); retryable {
+			if retryable, errMsg := checkFor400Error(resp, decodedBody); retryable {
 				reason := fmt.Sprintf("retryable 400 Bad Request: %s", errMsg)
 				if attempt >= maxRetries {
 					s.notifyFailure(maxRetries, reason)
@@ -419,6 +424,41 @@ func truncateBody(body []byte, maxLen int) string {
 	return string(body[:maxLen]) + "...(truncated)"
 }
 
+// decodeBody returns the decompressed body for known Content-Encoding schemes
+// (gzip, deflate). For empty/identity/unknown encodings, or on decode failure,
+// the raw body is returned unchanged. The Go http.Transport only auto-decodes
+// gzip when the caller did not set its own Accept-Encoding; since the proxy
+// forwards the client's Accept-Encoding header verbatim, upstream responses
+// stay encoded and we must decode here for logging and error inspection.
+func decodeBody(headers http.Header, body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	switch strings.ToLower(strings.TrimSpace(headers.Get("Content-Encoding"))) {
+	case "gzip":
+		r, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body
+		}
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return body
+		}
+		return out
+	case "deflate":
+		r := flate.NewReader(bytes.NewReader(body))
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return body
+		}
+		return out
+	default:
+		return body
+	}
+}
+
 func (s *Server) notifyRetry(retryAttempt, maxRetries int, retryInterval time.Duration, reason string) {
 	sendTerminalNotification(fmt.Sprintf("Encore retry %d/%d in %s: %s", retryAttempt, maxRetries, retryInterval, reason))
 }
@@ -507,36 +547,21 @@ const maxMaskedErrorBodySize = 1024
 // we will inspect for retryable patterns in non-200 responses.
 const maxRetryableErrorBodySize = 16 * 1024
 
-// checkForMaskedError reads the body of an HTTP 200 non-streaming response and
-// checks whether it actually contains an error message. If so, it returns
-// retryable=true and the error text. The response body is always replaced with
-// a rewound reader so the caller can still use it (for logging or piping).
-func checkForMaskedError(resp *http.Response) (retryable bool, errMsg string) {
+// checkForMaskedError inspects the (already-decoded) body of an HTTP 200
+// non-streaming response and reports whether it actually contains an error
+// message. The caller is responsible for reading and decompressing the body.
+func checkForMaskedError(resp *http.Response, bodyBytes []byte) (retryable bool, errMsg string) {
 	// Only inspect non-streaming 200s.
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
 		return false, ""
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxMaskedErrorBodySize+1))
-	remaining, _ := io.ReadAll(resp.Body) // drain any remainder
-	resp.Body.Close()
-
-	if err != nil {
-		resp.Body = io.NopCloser(bytes.NewReader(nil))
-		return false, ""
-	}
-
 	// If the body is larger than our cap, it's almost certainly a real
-	// response — reassemble and return.
+	// response, not a short error payload.
 	if len(bodyBytes) > maxMaskedErrorBodySize {
-		full := append(bodyBytes, remaining...)
-		resp.Body = io.NopCloser(bytes.NewReader(full))
 		return false, ""
 	}
-
-	// Restore body for the caller.
-	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Strategy 1: JSON with a top-level "error" key (and no "choices").
 	var obj map[string]json.RawMessage
@@ -568,32 +593,19 @@ func checkForMaskedError(resp *http.Response) (retryable bool, errMsg string) {
 	return false, ""
 }
 
-// checkFor400Error reads the body of an HTTP 400 response and determines
-// whether it's a retryable error (e.g. rate-limit from IdeaLab disguised as
-// 400). Non-retryable 400s (bad request, invalid model, etc.) are returned
-// as-is. The response body is always restored for the caller.
-func checkFor400Error(resp *http.Response) (retryable bool, errMsg string) {
+// checkFor400Error inspects the (already-decoded) body of an HTTP 400 response
+// and reports whether it's a retryable error (e.g. rate-limit from IdeaLab
+// disguised as 400). Non-retryable 400s (bad request, invalid model, etc.)
+// return false. The caller is responsible for reading and decompressing the body.
+func checkFor400Error(resp *http.Response, bodyBytes []byte) (retryable bool, errMsg string) {
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
 		return false, ""
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxRetryableErrorBodySize+1))
-	remaining, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
-	if err != nil {
-		resp.Body = io.NopCloser(bytes.NewReader(nil))
-		return false, ""
-	}
-
 	if len(bodyBytes) > maxRetryableErrorBodySize {
-		full := append(bodyBytes, remaining...)
-		resp.Body = io.NopCloser(bytes.NewReader(full))
 		return false, ""
 	}
-
-	resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Check JSON error bodies for retryable patterns.
 	var bodyJSON interface{}
