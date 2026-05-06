@@ -208,11 +208,23 @@ func (s *Server) doWithRetry(ctx context.Context, method, url string, body []byt
 			return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
 		}
 
-		// Read response body once for logging and inspection. The original
-		// (still-encoded) bytes are preserved on resp.Body so pipeResponse can
-		// forward them verbatim to the client; a decoded copy is used for our
-		// own logs and retry-detection logic so we never blast raw gzip/deflate
-		// bytes (which contain BEL / ESC) to the proxy's terminal.
+		// Streaming responses (SSE) must not be buffered: doing so would defeat
+		// the streaming behavior pipeResponse implements, and logging the body
+		// is meaningless for an unbounded stream — worse, upstreams that
+		// compress SSE with brotli/zstd would leak BEL/ESC bytes into the log
+		// and ring the proxy terminal's bell on every request. Body-based
+		// retry/error checks don't apply to SSE either.
+		if isStreamingResponse(resp) {
+			s.logger.Info("   <- %d %s (streaming)", resp.StatusCode, http.StatusText(resp.StatusCode))
+			return resp, nil
+		}
+
+		// Non-streaming: read body once for logging and inspection. The
+		// original (still-encoded) bytes are preserved on resp.Body so
+		// pipeResponse forwards them verbatim to the client; a decoded copy
+		// is used for our own logs and retry-detection logic so we never
+		// blast raw gzip/deflate bytes (which contain BEL / ESC) to the
+		// proxy's terminal.
 		fullBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(fullBody))
@@ -416,12 +428,37 @@ func retryableStatusReason(statusCode int, bodyPreview string) string {
 }
 
 // truncateBody returns the body as a string, truncated to maxLen bytes with
-// an ellipsis suffix if it exceeds that length. Used for debug logging.
+// an ellipsis suffix if it exceeds that length. Control characters that would
+// corrupt or hijack the terminal (BEL, ESC, CR, etc.) are replaced with '.'
+// — anything reaching this function is destined for the proxy's stdout via
+// the logger, and an unsanitized BEL alone is enough to ring the kitty/iTerm
+// activity indicator. \t and \n are preserved for readability.
 func truncateBody(body []byte, maxLen int) string {
+	var s string
 	if len(body) <= maxLen {
-		return string(body)
+		s = string(body)
+	} else {
+		s = string(body[:maxLen]) + "...(truncated)"
 	}
-	return string(body[:maxLen]) + "...(truncated)"
+	return sanitizeForLog(s)
+}
+
+func sanitizeForLog(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return '.'
+		}
+		return r
+	}, s)
+}
+
+// isStreamingResponse reports whether the response body is an SSE stream that
+// must be piped chunk-by-chunk rather than buffered.
+func isStreamingResponse(resp *http.Response) bool {
+	return strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
 // decodeBody returns the decompressed body for known Content-Encoding schemes

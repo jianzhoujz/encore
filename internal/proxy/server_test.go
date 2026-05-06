@@ -67,6 +67,21 @@ func TestDecodeBodyUnknownEncodingFallsBack(t *testing.T) {
 	}
 }
 
+func TestTruncateBodyScrubsControlCharacters(t *testing.T) {
+	// BEL, ESC, CR, NUL — all of which would corrupt or hijack the terminal
+	// when written to the proxy's stdout via the logger.
+	dirty := []byte("event: hi\x07\x1b]9;evil\x07\x00\x0dmore")
+	got := truncateBody(dirty, 200)
+	for _, ch := range []rune{'\x07', '\x1b', '\x00', '\x0d'} {
+		if strings.ContainsRune(got, ch) {
+			t.Fatalf("expected control character %#x to be scrubbed, got %q", ch, got)
+		}
+	}
+	if !strings.Contains(got, "event: hi") {
+		t.Fatalf("expected readable text to survive sanitization, got %q", got)
+	}
+}
+
 func TestOSC9NotificationSequenceSanitizesControlCharacters(t *testing.T) {
 	seq := osc9NotificationSequence("Encore retry\n1/3: too many requests\x1b]9;injected\x07")
 
