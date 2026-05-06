@@ -9,7 +9,7 @@ import (
 	"github.com/jianzhoujz/encore/internal/proxy"
 )
 
-var version = "0.3.4"
+var version = "0.3.5"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -46,6 +46,8 @@ func runStart() {
 		os.Exit(1)
 	}
 	defer log.Close()
+
+	log.Info("Encore v%s — update: brew update --force && brew upgrade encore", version)
 
 	// Start the proxy servers (one per protocol, blocks until error or interrupt).
 	if err := proxy.StartServers(cfg, log); err != nil {
